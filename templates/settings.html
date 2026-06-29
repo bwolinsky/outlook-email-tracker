@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}IMAP Settings — Outlook Email Tracker{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center mt-4">
+  <div class="col-md-7 col-lg-6">
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, msg in messages %}
+        <div class="alert alert-{{ category }} alert-dismissible fade show">
+          {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+        </div>
+      {% endfor %}
+    {% endwith %}
+
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-gear me-2 text-primary"></i>IMAP Connection Settings
+      </div>
+      <div class="card-body p-4">
+        <p class="text-muted small mb-3">
+          Outlook and Microsoft 365 support IMAP. Enable it in
+          <a href="https://outlook.live.com/mail/options/mail/accounts" target="_blank">Outlook Settings &rarr; Mail &rarr; Sync email</a>
+          before filling in the form below.
+        </p>
+
+        <form method="post" action="/settings">
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Outlook Email Address</label>
+            <input type="email" class="form-control" name="imap_email"
+                   value="{{ imap_email }}" placeholder="you@outlook.com" required>
+          </div>
+          <div class="mb-3">
+            <label class="form-label fw-semibold">Password / App Password</label>
+            <input type="password" class="form-control" name="imap_password"
+                   placeholder="Enter password" required autocomplete="current-password">
+            <div class="form-text">
+              If your account uses 2FA, generate an
+              <a href="https://account.microsoft.com/security" target="_blank">App Password</a>
+              in your Microsoft Account security settings.
+            </div>
+          </div>
+          <div class="row g-3 mb-4">
+            <div class="col-8">
+              <label class="form-label fw-semibold">IMAP Server</label>
+              <input type="text" class="form-control" name="imap_host"
+                     value="{{ imap_host }}" placeholder="outlook.office365.com" required>
+            </div>
+            <div class="col-4">
+              <label class="form-label fw-semibold">Port</label>
+              <input type="number" class="form-control" name="imap_port"
+                     value="{{ imap_port }}" placeholder="993" required>
+            </div>
+          </div>
+          <button type="submit" class="btn btn-primary w-100">
+            <i class="bi bi-plug me-1"></i>Test &amp; Save Connection
+          </button>
+        </form>
+      </div>
+    </div>
+
+    <div class="card mt-3">
+      <div class="card-header fw-semibold">
+        <i class="bi bi-info-circle me-2 text-primary"></i>Common IMAP Servers
+      </div>
+      <table class="table table-sm mb-0">
+        <thead><tr><th>Provider</th><th>Host</th><th>Port</th></tr></thead>
+        <tbody>
+          <tr><td>Outlook.com / Hotmail</td><td>outlook.office365.com</td><td>993</td></tr>
+          <tr><td>Microsoft 365 (work)</td><td>outlook.office365.com</td><td>993</td></tr>
+          <tr><td>Gmail (if using Gmail)</td><td>imap.gmail.com</td><td>993</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="text-center mt-3">
+      <a href="/" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-arrow-left me-1"></i>Back to Dashboard
+      </a>
+    </div>
+  </div>
+</div>
+{% endblock %}

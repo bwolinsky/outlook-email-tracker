@@ -2,6 +2,27 @@
 {% block title %}Dashboard — Outlook Email Tracker{% endblock %}
 
 {% block content %}
+
+{% if needs_setup %}
+<div class="alert alert-warning d-flex align-items-center gap-3 mb-4">
+  <i class="bi bi-exclamation-triangle-fill fs-4"></i>
+  <div>
+    <strong>IMAP not configured.</strong>
+    Set up your Outlook credentials to enable automatic polling.
+    <a href="/settings" class="btn btn-warning btn-sm ms-2">Configure IMAP</a>
+  </div>
+</div>
+{% endif %}
+
+{% with messages = get_flashed_messages(with_categories=true) %}
+  {% for category, msg in messages %}
+    <div class="alert alert-{{ category }} alert-dismissible fade show">
+      {{ msg }}<button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+    </div>
+  {% endfor %}
+{% endwith %}
+
+<!-- Stats row -->
 <div class="row g-3 mb-4">
   <div class="col-sm-4">
     <div class="card text-center py-3">
@@ -17,11 +38,11 @@
   </div>
   <div class="col-sm-4">
     <div class="card text-center py-3">
-      <div class="fs-2 fw-bold text-primary">
+      <div class="fs-2 fw-bold" style="font-size:1rem!important">
         {% if stats.last_poll %}
-          <span class="fs-6">{{ stats.last_poll[:16].replace('T',' ') }} UTC</span>
+          {{ stats.last_poll[:16].replace('T',' ') }} UTC
         {% else %}
-          —
+          <span class="text-muted">Never</span>
         {% endif %}
       </div>
       <div class="text-muted small">Last Poll</div>
@@ -30,8 +51,28 @@
 </div>
 
 <div class="row g-4">
-  <!-- Topic cards -->
+  <!-- Left: topics + upload -->
   <div class="col-lg-8">
+
+    <!-- .eml upload panel -->
+    <div class="card mb-4">
+      <div class="card-header d-flex justify-content-between align-items-center">
+        <span class="fw-semibold"><i class="bi bi-upload me-2 text-primary"></i>Upload .eml Files</span>
+        <span class="text-muted small">Export from Outlook: File &rarr; Save As &rarr; .eml</span>
+      </div>
+      <div class="card-body">
+        <div id="drop-zone" class="border border-2 border-dashed rounded text-center py-4 px-3"
+             style="cursor:pointer; border-color:#0078d4!important; background:#f8fbff">
+          <i class="bi bi-file-earmark-arrow-up fs-2 text-primary mb-2 d-block"></i>
+          <div class="fw-semibold">Drag &amp; drop .eml files here</div>
+          <div class="text-muted small mt-1">or click to browse</div>
+          <input type="file" id="eml-input" accept=".eml" multiple class="d-none">
+        </div>
+        <div id="upload-status" class="mt-2 text-center d-none"></div>
+      </div>
+    </div>
+
+    <!-- Topic cards -->
     <h5 class="fw-semibold mb-3"><i class="bi bi-folder2-open me-2 text-primary"></i>Topic Areas</h5>
     {% if topics %}
       <div class="row g-3">
@@ -44,9 +85,6 @@
                   <h6 class="card-title fw-semibold mb-1">{{ topic.name }}</h6>
                   <span class="badge badge-topic rounded-pill">{{ topic.actual_count }}</span>
                 </div>
-                {% if topic.description %}
-                  <p class="card-text text-muted small mb-2">{{ topic.description }}</p>
-                {% endif %}
                 <div class="text-muted" style="font-size:.78rem">
                   <i class="bi bi-clock me-1"></i>
                   {% if topic.last_updated %}
@@ -63,24 +101,35 @@
       <div class="card">
         <div class="card-body text-center py-5 text-muted">
           <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-          No emails tracked yet. Click <strong>Refresh Now</strong> to fetch your first batch.
+          No emails tracked yet.<br>
+          Upload <strong>.eml files</strong> above, or configure IMAP and click <strong>Refresh Now</strong>.
         </div>
       </div>
     {% endif %}
   </div>
 
-  <!-- Activity log -->
+  <!-- Right: activity log + settings link -->
   <div class="col-lg-4">
-    <h5 class="fw-semibold mb-3"><i class="bi bi-journal-text me-2 text-primary"></i>Activity Log</h5>
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h5 class="fw-semibold mb-0"><i class="bi bi-journal-text me-2 text-primary"></i>Activity Log</h5>
+      <a href="/settings" class="btn btn-outline-secondary btn-sm">
+        <i class="bi bi-gear me-1"></i>IMAP Settings
+      </a>
+    </div>
     <div class="card" style="max-height:600px; overflow-y:auto;">
       <ul class="list-group list-group-flush">
         {% for entry in log %}
         <li class="list-group-item log-entry py-2">
           <div class="d-flex justify-content-between">
-            <span class="badge {% if entry.event_type == 'new_email' %}bg-success{% elif entry.event_type == 'poll_error' %}bg-danger{% else %}bg-secondary{% endif %} me-2">
+            <span class="badge
+              {% if entry.event_type in ('new_email','upload_email') %}bg-success
+              {% elif 'error' in entry.event_type %}bg-danger
+              {% else %}bg-secondary{% endif %} me-2">
               {{ entry.event_type }}
             </span>
-            <span class="text-muted" style="font-size:.75rem">{{ entry.logged_at[:16].replace('T',' ') }}</span>
+            <span class="text-muted" style="font-size:.75rem">
+              {{ entry.logged_at[:16].replace('T',' ') }}
+            </span>
           </div>
           {% if entry.topic_name %}<div class="mt-1 fw-semibold">{{ entry.topic_name }}</div>{% endif %}
           {% if entry.email_subject %}<div class="text-truncate text-muted">{{ entry.email_subject }}</div>{% endif %}
@@ -93,4 +142,46 @@
     </div>
   </div>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const dropZone = document.getElementById('drop-zone');
+const emlInput = document.getElementById('eml-input');
+const status   = document.getElementById('upload-status');
+
+dropZone.addEventListener('click', () => emlInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('bg-light'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('bg-light'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('bg-light');
+  uploadFiles(e.dataTransfer.files);
+});
+emlInput.addEventListener('change', () => uploadFiles(emlInput.files));
+
+async function uploadFiles(files) {
+  if (!files || files.length === 0) return;
+  const form = new FormData();
+  for (const f of files) form.append('eml_files', f);
+
+  status.className = 'mt-2 text-center';
+  status.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Analyzing emails…';
+
+  try {
+    const r = await fetch('/upload', { method: 'POST', body: form });
+    const d = await r.json();
+    if (d.error) {
+      status.innerHTML = `<span class="text-danger">${d.error}</span>`;
+    } else {
+      status.innerHTML = `<span class="text-success"><i class="bi bi-check-circle me-1"></i>
+        ${d.processed} processed, ${d.new} new emails added.
+        ${d.errors.length ? d.errors.join('; ') : ''}</span>`;
+      setTimeout(() => location.reload(), 2000);
+    }
+  } catch(e) {
+    status.innerHTML = `<span class="text-danger">Upload failed: ${e}</span>`;
+  }
+}
+</script>
 {% endblock %}

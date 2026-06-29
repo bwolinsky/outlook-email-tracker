@@ -1,117 +1,183 @@
-import json
-import os
+"""IMAP-based email fetcher for Outlook / Microsoft 365."""
+import email as email_lib
+import email.message
+import imaplib
+import re
+import ssl
 from datetime import datetime, timezone
-from pathlib import Path
-
-import msal
-import requests
+from email.header import decode_header as _decode_header
+from email.utils import parsedate_to_datetime
 
 import config
 
 
+def _decode_str(value: str | bytes | None, charset: str | None = None) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, bytes):
+        return value.decode(charset or "utf-8", errors="replace")
+    return value
+
+
+def decode_mime_words(raw: str) -> str:
+    """Decode RFC-2047 encoded header words."""
+    if not raw:
+        return ""
+    parts = _decode_header(raw)
+    return "".join(_decode_str(part, enc) for part, enc in parts)
+
+
+def strip_html(html: str) -> str:
+    text = re.sub(r"<style[^>]*>.*?</style>", " ", html, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<script[^>]*>.*?</script>", " ", text, flags=re.DOTALL | re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", " ", text)
+    for esc, ch in [("&nbsp;", " "), ("&amp;", "&"), ("&lt;", "<"), ("&gt;", ">"), ("&#39;", "'")]:
+        text = text.replace(esc, ch)
+    return re.sub(r"\s{2,}", " ", text).strip()
+
+
+def parse_email_message(msg: email.message.Message) -> dict:
+    """Convert a parsed email.Message into our standard dict."""
+    subject = decode_mime_words(msg.get("Subject", "(no subject)"))
+    from_raw = decode_mime_words(msg.get("From", ""))
+    # Parse "Name <addr>" or just "addr"
+    m = re.match(r"^(.*?)\s*<([^>]+)>$", from_raw)
+    if m:
+        sender_name, sender_email = m.group(1).strip().strip('"'), m.group(2).strip()
+    else:
+        sender_name, sender_email = "", from_raw.strip()
+
+    # Date
+    received_at = ""
+    date_str = msg.get("Date", "")
+    if date_str:
+        try:
+            received_at = parsedate_to_datetime(date_str).astimezone(timezone.utc).isoformat()
+        except Exception:
+            received_at = date_str
+
+    # Body: prefer plain text, fall back to HTML
+    body_text = ""
+    body_html = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            ct = part.get_content_type()
+            if ct == "text/plain" and not body_text:
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or "utf-8"
+                body_text = _decode_str(payload, charset)
+            elif ct == "text/html" and not body_html:
+                payload = part.get_payload(decode=True)
+                charset = part.get_content_charset() or "utf-8"
+                body_html = _decode_str(payload, charset)
+    else:
+        payload = msg.get_payload(decode=True)
+        charset = msg.get_content_charset() or "utf-8"
+        raw_body = _decode_str(payload, charset)
+        if msg.get_content_type() == "text/html":
+            body_html = raw_body
+        else:
+            body_text = raw_body
+
+    full_body = body_text or strip_html(body_html)
+    body_preview = full_body[:500].replace("\n", " ").strip()
+
+    # Stable ID from Message-ID header; fall back to subject+date hash
+    msg_id = msg.get("Message-ID", "").strip("<>").strip()
+    if not msg_id:
+        import hashlib
+        msg_id = hashlib.sha1(f"{subject}{received_at}".encode()).hexdigest()
+
+    return {
+        "graph_id": msg_id,
+        "subject": subject,
+        "sender_name": sender_name,
+        "sender_email": sender_email,
+        "received_at": received_at,
+        "body_preview": body_preview,
+        "full_body": full_body[:8000],
+    }
+
+
 class OutlookEmailFetcher:
+    """Connects to Outlook/Microsoft 365 (or any IMAP server) via IMAP over SSL."""
+
     def __init__(self):
-        self._cache = msal.SerializableTokenCache()
-        self._load_cache()
-        self._app = msal.PublicClientApplication(
-            client_id=config.AZURE_CLIENT_ID,
-            authority=f"https://login.microsoftonline.com/{config.AZURE_TENANT_ID}",
-            token_cache=self._cache,
-        )
+        self._imap: imaplib.IMAP4_SSL | None = None
 
-    def _load_cache(self):
-        cache_path = Path(config.TOKEN_CACHE_PATH)
-        if cache_path.exists():
-            self._cache.deserialize(cache_path.read_text())
+    # ── Connection ─────────────────────────────────────────────────────────────
 
-    def _save_cache(self):
-        if self._cache.has_state_changed:
-            Path(config.TOKEN_CACHE_PATH).write_text(self._cache.serialize())
+    def connect(self, email_addr: str, password: str,
+                host: str = None, port: int = None) -> None:
+        host = host or config.IMAP_HOST
+        port = port or config.IMAP_PORT
+        ctx = ssl.create_default_context()
+        self._imap = imaplib.IMAP4_SSL(host, port, ssl_context=ctx)
+        self._imap.login(email_addr, password)
 
-    def _get_token(self) -> str | None:
-        accounts = self._app.get_accounts()
-        if accounts:
-            result = self._app.acquire_token_silent(config.GRAPH_SCOPES, account=accounts[0])
-            if result and "access_token" in result:
-                self._save_cache()
-                return result["access_token"]
-        return None
+    def disconnect(self):
+        if self._imap:
+            try:
+                self._imap.logout()
+            except Exception:
+                pass
+            self._imap = None
 
     def is_authenticated(self) -> bool:
-        return bool(self._get_token())
-
-    def initiate_device_flow(self) -> dict:
-        """Start device code auth flow. Returns flow dict with user_code and verification_uri."""
-        flow = self._app.initiate_device_flow(scopes=config.GRAPH_SCOPES)
-        if "user_code" not in flow:
-            raise RuntimeError(f"Failed to create device flow: {flow.get('error_description', 'unknown error')}")
-        return flow
-
-    def complete_device_flow(self, flow: dict) -> bool:
-        """Poll until the user completes authentication. Returns True on success."""
-        result = self._app.acquire_token_by_device_flow(flow)
-        if "access_token" in result:
-            self._save_cache()
+        if not self._imap:
+            return False
+        try:
+            self._imap.noop()
             return True
-        return False
+        except Exception:
+            return False
 
-    def _graph_get(self, path: str, params: dict = None) -> dict:
-        token = self._get_token()
-        if not token:
-            raise RuntimeError("Not authenticated. Run auth flow first.")
-        headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-        resp = requests.get(
-            f"{config.GRAPH_API_BASE}{path}",
-            headers=headers,
-            params=params,
-            timeout=30,
-        )
-        resp.raise_for_status()
-        return resp.json()
+    # ── Fetching ───────────────────────────────────────────────────────────────
 
-    def get_current_user(self) -> dict:
-        return self._graph_get("/me")
+    def fetch_emails(self, since_datetime: str = None,
+                     max_count: int = None, folder: str = "INBOX") -> list[dict]:
+        if not self._imap:
+            raise RuntimeError("Not connected — call connect() first.")
 
-    def fetch_emails(self, since_datetime: str = None, max_count: int = None) -> list[dict]:
-        """Fetch emails from the inbox, optionally filtered by datetime."""
         max_count = max_count or config.MAX_EMAILS_PER_POLL
-        params = {
-            "$select": "id,subject,from,receivedDateTime,bodyPreview,body",
-            "$orderby": "receivedDateTime desc",
-            "$top": min(max_count, 100),
-        }
+        self._imap.select(folder, readonly=True)
+
+        # IMAP SINCE uses DD-Mon-YYYY; derive date from ISO datetime string
         if since_datetime:
-            params["$filter"] = f"receivedDateTime gt {since_datetime}"
+            try:
+                dt = datetime.fromisoformat(since_datetime.replace("Z", "+00:00"))
+                since_str = dt.strftime("%d-%b-%Y")
+                typ, data = self._imap.search(None, f'(SINCE "{since_str}")')
+            except Exception:
+                typ, data = self._imap.search(None, "ALL")
+        else:
+            typ, data = self._imap.search(None, "ALL")
+
+        if typ != "OK":
+            return []
+
+        ids = data[0].split()
+        # Fetch most recent first
+        ids = ids[::-1][:max_count]
 
         results = []
-        url = "/me/messages"
+        for uid in ids:
+            try:
+                typ, msg_data = self._imap.fetch(uid, "(RFC822)")
+                if typ != "OK" or not msg_data or not msg_data[0]:
+                    continue
+                raw = msg_data[0][1]
+                msg = email_lib.message_from_bytes(raw)
+                results.append(parse_email_message(msg))
+            except Exception:
+                continue
 
-        while url and len(results) < max_count:
-            if url.startswith("http"):
-                # nextLink is a full URL
-                token = self._get_token()
-                headers = {"Authorization": f"Bearer {token}", "Accept": "application/json"}
-                resp = requests.get(url, headers=headers, timeout=30)
-                resp.raise_for_status()
-                data = resp.json()
-            else:
-                data = self._graph_get(url, params if url == "/me/messages" else None)
+        return results
 
-            results.extend(data.get("value", []))
-            url = data.get("@odata.nextLink")
+    # ── .eml file parsing ─────────────────────────────────────────────────────
 
-        return results[:max_count]
-
-    def parse_email(self, raw: dict) -> dict:
-        """Normalize a raw Graph API email object."""
-        sender = raw.get("from", {}).get("emailAddress", {})
-        return {
-            "graph_id": raw["id"],
-            "subject": raw.get("subject", "(no subject)"),
-            "sender_name": sender.get("name", ""),
-            "sender_email": sender.get("address", ""),
-            "received_at": raw.get("receivedDateTime", ""),
-            "body_preview": raw.get("bodyPreview", ""),
-            "full_body": raw.get("body", {}).get("content", ""),
-            "body_type": raw.get("body", {}).get("contentType", "text"),
-        }
+    @staticmethod
+    def parse_eml_bytes(data: bytes) -> dict:
+        """Parse a raw .eml file into our standard email dict."""
+        msg = email_lib.message_from_bytes(data)
+        return parse_email_message(msg)
