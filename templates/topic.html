@@ -1,0 +1,69 @@
+{% extends "base.html" %}
+{% block title %}{{ topic.name }} — Outlook Email Tracker{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4 gap-3">
+  <a href="/" class="btn btn-outline-secondary btn-sm"><i class="bi bi-arrow-left me-1"></i>Back</a>
+  <h4 class="mb-0 fw-bold">{{ topic.name }}</h4>
+  <span class="badge badge-topic fs-6">{{ emails|length }} emails</span>
+</div>
+
+{% if emails %}
+<div class="row g-3">
+  {% for email in emails %}
+  <div class="col-12">
+    <div class="card priority-{{ email.priority or 'medium' }}">
+      <div class="card-body">
+        <div class="row g-2">
+          <div class="col-md-9">
+            <div class="d-flex align-items-start gap-2 mb-1">
+              <span class="badge bg-{% if email.priority == 'high' %}danger{% elif email.priority == 'low' %}success{% else %}warning text-dark{% endif %}">
+                {{ email.priority or 'medium' }}
+              </span>
+              <h6 class="mb-0 fw-semibold">{{ email.subject }}</h6>
+            </div>
+            <div class="text-muted small mb-2">
+              <i class="bi bi-person me-1"></i>{{ email.sender_name or email.sender_email }}
+              {% if email.sender_name and email.sender_email %}&lt;{{ email.sender_email }}&gt;{% endif %}
+              &nbsp;&bull;&nbsp;
+              <i class="bi bi-clock me-1"></i>{{ email.received_at[:16].replace('T',' ') if email.received_at else '—' }} UTC
+            </div>
+            {% if email.summary %}
+            <p class="mb-2">{{ email.summary }}</p>
+            {% endif %}
+            {% if email.action_items %}
+            <div>
+              <strong class="small">Action Items:</strong>
+              <ul class="mb-0 mt-1 ps-3">
+                {% for item in email.action_items %}
+                <li class="small">{{ item }}</li>
+                {% endfor %}
+              </ul>
+            </div>
+            {% endif %}
+          </div>
+          <div class="col-md-3 text-md-end">
+            <button class="btn btn-outline-secondary btn-sm" type="button"
+              data-bs-toggle="collapse" data-bs-target="#body-{{ loop.index }}">
+              <i class="bi bi-chevron-down me-1"></i>Show Body
+            </button>
+          </div>
+        </div>
+        <div class="collapse mt-3" id="body-{{ loop.index }}">
+          <div class="bg-light rounded p-3" style="font-size:.85rem; max-height:300px; overflow-y:auto;">
+            <pre>{{ email.body_preview }}</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-5 text-muted">
+    <i class="bi bi-inbox fs-1 d-block mb-2"></i>No emails in this topic yet.
+  </div>
+</div>
+{% endif %}
+{% endblock %}
