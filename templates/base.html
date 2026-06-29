@@ -30,9 +30,6 @@
     <a class="navbar-brand fw-bold" href="/"><i class="bi bi-envelope-open me-2"></i>Outlook Email Tracker</a>
     <div class="ms-auto d-flex align-items-center gap-3">
       <span class="navbar-text" id="nav-stats"></span>
-      <button class="btn btn-light btn-sm" onclick="triggerRefresh()" id="refresh-btn">
-        <i class="bi bi-arrow-clockwise me-1"></i>Refresh Now
-      </button>
     </div>
   </div>
 </nav>
@@ -42,21 +39,6 @@
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-async function triggerRefresh() {
-  const btn = document.getElementById('refresh-btn');
-  btn.disabled = true;
-  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Refreshing...';
-  try {
-    const r = await fetch('/refresh', { method: 'POST' });
-    const data = await r.json();
-    btn.innerHTML = `<i class="bi bi-check-circle me-1"></i>${data.new || 0} new`;
-    setTimeout(() => { btn.disabled = false; btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh Now'; location.reload(); }, 2000);
-  } catch(e) {
-    btn.disabled = false;
-    btn.innerHTML = '<i class="bi bi-arrow-clockwise me-1"></i>Refresh Now';
-  }
-}
-
 async function loadStats() {
   try {
     const r = await fetch('/api/stats');

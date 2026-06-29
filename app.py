@@ -76,15 +76,10 @@ scheduler.add_job(
 
 @app.route("/")
 def index():
-    needs_setup = not bool(
-        tracker.get_app_state("imap_email") or config.IMAP_EMAIL
-    )
     topics = tracker.get_all_topics()
     stats = tracker.get_stats()
     log = tracker.get_recent_log(25)
-    return render_template("index.html",
-                           topics=topics, stats=stats, log=log,
-                           needs_setup=needs_setup)
+    return render_template("index.html", topics=topics, stats=stats, log=log)
 
 
 @app.route("/topic/<int:topic_id>")
